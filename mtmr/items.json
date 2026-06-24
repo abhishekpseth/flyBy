@@ -1,0 +1,14 @@
+[
+  {
+    "type": "shellScriptTitledButton",
+    "source": {
+      "inline": "curl -s --max-time 2 http://127.0.0.1:8787/touchbar"
+    },
+    "refreshInterval": 5,
+    "align": "left",
+    "bordered": false,
+    "action": "shellScript",
+    "executablePath": "/usr/bin/open",
+    "shellArguments": ["https://www.flightradar24.com"]
+  }
+]

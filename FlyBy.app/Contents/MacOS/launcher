@@ -1,0 +1,37 @@
+#!/bin/bash
+# FlyBy — Dock launcher: ONE app to control the flight tracker.
+# Detects whether the tracker is running and lets you Start or Stop it.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+PROJ="/Users/macbook/Developer/flightNotification"
+cd "$PROJ" || exit 1
+
+if pgrep -f "node src/server.js" >/dev/null; then
+  STATUS="✈  FlyBy is currently ON."
+  DEFAULT="Stop"
+else
+  STATUS="🛬  FlyBy is currently OFF."
+  DEFAULT="Start"
+fi
+
+ICON="$PROJ/FlyBy.app/Contents/Resources/FlyBy.icns"
+CHOICE=$(osascript <<EOF 2>/dev/null
+set theIcon to (POSIX file "$ICON") as alias
+button returned of (display dialog "$STATUS" with title "FlyBy" ¬
+  buttons {"Stop", "Start", "Cancel"} default button "$DEFAULT" ¬
+  cancel button "Cancel" with icon theIcon)
+EOF
+)
+
+case "$CHOICE" in
+  Start)
+    bash scripts/fly.sh >> /tmp/flightnotifier-launch.log 2>&1
+    osascript -e 'display notification "Now tracking planes overhead 🛫" with title "FlyBy started"'
+    ;;
+  Stop)
+    bash scripts/stop.sh >> /tmp/flightnotifier-launch.log 2>&1
+    osascript -e 'display notification "Touch Bar back to normal ✓" with title "FlyBy stopped"'
+    ;;
+  *)
+    : # Cancelled — do nothing.
+    ;;
+esac
