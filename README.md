@@ -13,16 +13,21 @@ A small always-on Node.js service that watches the sky around your location and:
 It ships with a **one-click Dock app** to start/stop everything, so you never have to touch the
 terminal after setup.
 
-Data comes from the unofficial **FlightRadar24** SDK (rich: route + model), and automatically
-falls back to the official free **OpenSky Network** API (callsign + altitude only) if FR24 fails.
+**How it sources data:** the official **OpenSky Network** API is the primary gate — every poll asks
+it "is anything airborne within my radius?" (cheap, quota-based, reliable). Only when a plane is
+actually overhead does it call the unofficial **FlightRadar24** SDK to enrich that plane with route
++ aircraft model. This keeps FR24 usage tiny, so it never gets rate-limited. If OpenSky is ever
+unavailable, it falls back to FR24 for detection too.
 
 > **Note:** paths in the Dock app and the launch agent are currently hard-coded to one machine.
 > If you clone this, update them to your own checkout path — see [Make it your own](#make-it-your-own).
 
 ## Requirements
 
-- Node.js 18+ (uses built-in `fetch`). Tested on Node 22.
+- Node.js 20.12+ (uses built-in `fetch` and `process.loadEnvFile`). Tested on Node 22.
 - macOS (for notifications and the Dock app).
+- A **free OpenSky Network account** for API access — see [Setup](#setup). (Anonymous access
+  works but is capped at 400 credits/day, which frequent polling exhausts within hours.)
 - A MacBook Pro with a physical Touch Bar + [MTMR](https://github.com/Toxblh/MTMR) for the Touch Bar display.
   (The notifications and the `/status` endpoint work without MTMR.)
 
@@ -42,15 +47,31 @@ cp .env.example .env
 # .env
 HOME_LAT=51.4700        # your latitude  (Apple Maps: right-click → copy coordinates)
 HOME_LON=-0.4543        # your longitude
-RADIUS_KM=8             # notify/display planes within this many km
-POLL_SECONDS=20         # how often to poll (keep >= 15s to be polite to FR24)
+RADIUS_KM=15            # notify/display planes within this many km
+POLL_SECONDS=30         # how often to poll (keep >= 22s to stay in OpenSky budget)
 PORT=8787               # local HTTP port
-ENRICH_DETAILS=true     # fetch full model + airport names for nearest/new flights
+ENRICH_DETAILS=true     # add route + aircraft model from FlightRadar24 on a hit
+OPENSKY_CLIENT_ID=      # from your free OpenSky account (see below)
+OPENSKY_CLIENT_SECRET=
 # NOTIFY_SOUND=Glass    # optional: use a built-in macOS sound instead of the chime
 ```
 
-`.env` is git-ignored, so your coordinates stay on your machine. All settings have sensible
-defaults if omitted.
+`.env` is git-ignored, so your coordinates and credentials stay on your machine. All settings have
+sensible defaults if omitted.
+
+### OpenSky account (recommended)
+
+OpenSky is the primary data source. A free account raises your quota from **400 → 4,000
+credits/day**, enough for 30-second polling all day.
+
+1. Register at [opensky-network.org](https://opensky-network.org/).
+2. Go to **My OpenSky → Account → API clients** and create a client.
+3. Copy the **client id** and **client secret** into `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`
+   in your `.env`.
+
+Each `/states/all` poll of a small area costs 1 credit, so `POLL_SECONDS=30` ≈ 2,880/day — well
+under the 4,000 budget. On startup the server logs whether it's authenticated. Without credentials
+it runs anonymously (400/day) and warns you.
 
 ## Usage
 
@@ -146,14 +167,15 @@ Then: `launchctl load ~/Library/LaunchAgents/club.30sundays.flightnotifier.plist
 ## How it works
 
 ```
-poller.js  ── every POLL_SECONDS ──▶  FR24 SDK  (primary)
-                                       └─ on error ─▶ OpenSky  (fallback)
-                                              │
+poller.js  ── every POLL_SECONDS ──▶  OpenSky /states/all   (primary gate, OAuth2)
+                                              │                └─ on error ─▶ FR24 (fallback)
                           filter to circular radius (geo.js haversine)
                                               │
-              diff vs tracked state ─▶ new entrants ─▶ macOS notification (notify.js)
+                       any planes in range?  ──no──▶  show nothing (FR24 never called)
+                                              │ yes
+                    FR24 SDK: match by icao24/callsign ─▶ graft route + aircraft model
                                               │
-                       enrich nearest+new with model/route (FR24 details)
+              diff vs tracked state ─▶ new entrants ─▶ macOS notification (notify.js)
                                               │
                           cache snapshot ─▶ served by server.js
                                               │
@@ -161,6 +183,9 @@ poller.js  ── every POLL_SECONDS ──▶  FR24 SDK  (primary)
                             ▲
                 MTMR widget polls every 5s
 ```
+
+FR24 is only touched when something is actually overhead, so its request volume stays tiny and it
+never gets rate-limited — while OpenSky's reliable quota does the every-poll detection.
 
 ## Project layout
 
@@ -177,7 +202,7 @@ scripts/
 src/
   server.js           HTTP server: /touchbar and /status
   poller.js           polling loop + new-entrant diffing
-  sources/            flightradar.js (primary) + opensky.js (fallback)
+  sources/            opensky.js (primary gate, OAuth2) + flightradar.js (enrich on hit)
   geo.js              haversine distance / radius filter
   format.js           Touch Bar text + notification formatting
   notify.js           macOS notifications + chime
@@ -187,12 +212,15 @@ src/
 
 ## Notes & limitations
 
-- The FlightRadar24 SDK is **unofficial** (it scrapes FR24) and may rate-limit or break. The
-  OpenSky fallback keeps the tool working — with reduced detail (no route/model) — when that
-  happens. Polling at 20s and enriching only the nearest/new flights keeps request volume low.
-- OpenSky anonymous access is ~400 credits/day; a small bounding box at 20s polling stays within
-  budget.
-- For best results keep `RADIUS_KM` modest (5–10 km) so "overhead" actually means overhead.
+- The FlightRadar24 SDK is **unofficial** (it scrapes FR24) and may rate-limit or return empty
+  results. Because it's now only called when a plane is genuinely in range, that rarely happens —
+  and when it does, the flight still shows with OpenSky data (callsign, altitude, distance), just
+  without route/model until FR24 recovers.
+- OpenSky credits reset daily (UTC). A registered account is 4,000/day; at `POLL_SECONDS=30` that's
+  ~2,880 polls/day. Lowering `POLL_SECONDS` too far will exhaust the quota — keep it ≥ 22s.
+- If you're right next to a busy airport, most nearby aircraft are on the ground (taxiing/parked);
+  FlyBy filters those out and only shows **airborne** planes, so a small radius can look empty for
+  stretches. Bump `RADIUS_KM` (15–30) to catch more overhead traffic.
 
 ## License
 

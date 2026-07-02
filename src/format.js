@@ -21,8 +21,15 @@ function endpoint(city, name, iata) {
   return iata || "—";
 }
 
-/** Full route string, e.g. "Mumbai (BOM) → Delhi (DEL)". */
+const hasOrigin = (f) => Boolean(f.originCity || f.originName || f.originIata);
+const hasDest = (f) => Boolean(f.destCity || f.destName || f.destIata);
+
+/**
+ * Full route string, e.g. "Mumbai (BOM) → Delhi (DEL)", or null when we have no
+ * route at all (e.g. an OpenSky-only flight that FR24 hasn't enriched yet).
+ */
 function route(f) {
+  if (!hasOrigin(f) && !hasDest(f)) return null;
   return `${endpoint(f.originCity, f.originName, f.originIata)} → ${endpoint(f.destCity, f.destName, f.destIata)}`;
 }
 
@@ -45,14 +52,13 @@ function carrier(f) {
 export function touchbarLine(flights) {
   const f = nearest(flights);
   if (!f) return "";
-  const parts = [
-    carrier(f),
-    dash(f.callsign),
-    route(f),
-    dash(f.model),
-    altStr(f.altitudeFt),
-    distStr(f.distanceKm),
-  ];
+  const parts = [carrier(f)];
+  // Only repeat the callsign when we led with an airline name (else it dupes).
+  if (f.airline && f.callsign && f.callsign !== f.airline) parts.push(f.callsign);
+  const r = route(f);
+  if (r) parts.push(r);
+  if (f.model) parts.push(f.model);
+  parts.push(altStr(f.altitudeFt), distStr(f.distanceKm));
   return `✈  ${parts.join("  ·  ")}`;
 }
 
@@ -67,7 +73,9 @@ export function notifyTitle(f) {
  * "Mangalore → Delhi · Airbus A320 · FL090 · 3.6 km away".
  */
 export function notifyBody(f) {
-  const parts = [route(f)];
+  const parts = [];
+  const r = route(f);
+  if (r) parts.push(r);
   if (f.model) parts.push(f.model);
   parts.push(altStr(f.altitudeFt));
   parts.push(`${distStr(f.distanceKm)} away`);

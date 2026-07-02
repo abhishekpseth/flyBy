@@ -2,6 +2,7 @@ import http from "node:http";
 import { config } from "./config.js";
 import { startPolling, snapshot } from "./poller.js";
 import { touchbarLine } from "./format.js";
+import { isAuthenticated } from "./sources/opensky.js";
 
 const server = http.createServer((req, res) => {
   const url = (req.url || "/").split("?")[0];
@@ -27,5 +28,14 @@ server.listen(config.PORT, "127.0.0.1", () => {
   console.log(`[server] listening on http://127.0.0.1:${config.PORT}`);
   console.log(`[server]   /touchbar  → one-line nearest plane`);
   console.log(`[server]   /status    → full JSON of in-radius flights`);
+  const reqPerDay = Math.round(86400 / Math.max(5, config.POLL_SECONDS));
+  if (isAuthenticated()) {
+    console.log(`[server] OpenSky: authenticated (4000 credits/day; ~${reqPerDay} polls/day at ${config.POLL_SECONDS}s)`);
+  } else {
+    console.warn(
+      `[server] OpenSky: ANONYMOUS (400 credits/day) — ~${reqPerDay} polls/day at ${config.POLL_SECONDS}s ` +
+        `will exhaust the quota. Set OPENSKY_CLIENT_ID/SECRET in .env (free account).`,
+    );
+  }
   startPolling();
 });

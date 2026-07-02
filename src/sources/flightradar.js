@@ -10,6 +10,7 @@ function normalize(flight, homeLat, homeLon) {
   const lon = flight.longitude;
   return {
     id: flight.id,
+    icao24: clean(flight.icao24bit)?.toLowerCase() ?? null,
     callsign: clean(flight.callsign) || clean(flight.number),
     flightNumber: clean(flight.number),
     airline: clean(flight.airlineName) || clean(flight.airlineIcao) || clean(flight.airlineIata),
@@ -62,7 +63,7 @@ export async function fetchFlights(homeLat, homeLon, radiusKm) {
  * heavier per-flight details endpoint. Best-effort: swallows errors.
  */
 export async function enrich(flight, homeLat, homeLon) {
-  if (flight.source !== "fr24" || !flight._raw) return flight;
+  if (!flight._raw) return flight; // need the raw FR24 object for the details call
   try {
     const details = await api.getFlightDetails(flight._raw);
     flight._raw.setFlightDetails(details);
